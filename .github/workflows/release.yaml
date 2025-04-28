@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Keep manual trigger as backup
+
+env:
+  NODE_VERSION: latest
+
+# Grants permissions for GITHUB_TOKEN
+permissions:
+  contents: write # to upload release asset
+  id-token: write # to verify the deployment originates from an appropriate source
+  packages: write # to push to GHCR package  
+
+jobs:
+  build-and-upload-image:
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Checkout main repository
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+          lfs: false
+
+      # Step 2: Set up pnpm
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set lowercase repository name
+        run: |
+          # Get just the repo name (after the /) and convert to lowercase
+          REPO_NAME=$(echo ${GITHUB_REPOSITORY} | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
+          echo "REPO_NAME=${REPO_NAME}" >> $GITHUB_ENV          
+
+      # Step 3: Install dependencies
+      - name: Install dependencies
+        run: pnpm install
+
+      # Step 4: Generate PROD assets
+      - name: Generate PROD assets
+        run: |
+          echo "Generating PROD assets..."
+          pnpm generate
+          echo "Creating PROD zip file..."
+          cd .output/public && zip -rv ../../prod-${REPO_NAME}-prez-ui-static-assets.zip . && cd ../../
+          echo "PROD zip file details:"
+          ls -la prod-${REPO_NAME}-prez-ui-static-assets.zip
+          echo "Cleaning up..."
+          rm -rf .output
+        env:
+          NUXT_PUBLIC_PREZ_API_ENDPOINT: ${{ vars.PROD_ENDPOINT }}
+
+      # Step 5: Generate DEV assets
+      - name: Generate DEV assets
+        run: |
+          echo "Generating DEV assets..."
+          pnpm generate
+          echo "Creating DEV zip file..."
+          cd .output/public && zip -rv ../../dev-${REPO_NAME}-prez-ui-static-assets.zip . && cd ../../
+          echo "DEV zip file details:"
+          ls -la dev-${REPO_NAME}-prez-ui-static-assets.zip
+          echo "Current directory contents:"
+          ls -la
+        env:
+          NUXT_PUBLIC_PREZ_API_ENDPOINT: ${{ vars.DEV_ENDPOINT }}
+
+      # Step 5: Run Semantic Release to determine the release version
+      - name: Set up Semantic Release
+        run: npm install -g semantic-release @semantic-release/changelog @semantic-release/git @semantic-release/github @semantic-release/commit-analyzer @semantic-release/release-notes-generator conventional-changelog-conventionalcommits
+      - name: Run Semantic Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: semantic-release
+
+      # Step 6: Get the release version
+      - name: Get release version
+        id: get_version
+        run: |
+          release_tag=$(git describe --tags $(git rev-list --tags --max-count=1))
+          echo "release_tag=$release_tag" >> $GITHUB_ENV
+        shell: bash
+
+      # Step 7: Upload static assets as a release asset
+      - name: Upload static assets as release asset
+        uses: softprops/action-gh-release@v1
+        if: success()
+        with:
+          files: |
+            prod-${{ env.REPO_NAME }}-prez-ui-static-assets.zip
+            dev-${{ env.REPO_NAME }}-prez-ui-static-assets.zip
+          tag_name: ${{ env.release_tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

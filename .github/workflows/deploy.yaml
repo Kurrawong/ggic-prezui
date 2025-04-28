@@ -1,0 +1,135 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+      version:
+        description: 'Version to deploy (leave empty for latest)'
+        required: false
+        type: string
+
+env:
+  DEV_BUCKET_NAME: ${{ vars.DEV_BUCKET_NAME }}
+  PROD_BUCKET_NAME: ${{ vars.PROD_BUCKET_NAME }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+      
+    steps:
+      - name: Get deployment version
+        id: get_version
+        run: |
+          if [ -z "${{ inputs.version }}" ]; then
+            # If no version specified, get latest
+            DEPLOY_VERSION=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
+            if [ "${DEPLOY_VERSION}" = "null" ]; then
+              echo "::error::No releases found"
+              exit 1
+            fi
+          else
+            DEPLOY_VERSION="${{ inputs.version }}"
+          fi
+          # Verify we have a version
+          if [ -z "${DEPLOY_VERSION}" ]; then
+            echo "::error::No version specified and couldn't get latest version"
+            exit 1
+          fi
+          echo "deploy_version=${DEPLOY_VERSION}" >> $GITHUB_ENV
+          echo "Selected version: ${DEPLOY_VERSION}"
+
+      - name: Download and extract release assets
+        run: |
+          # Set bucket name based on environment
+          if [ "${{ inputs.environment }}" = "dev" ]; then
+            if [ -n "${DEV_BUCKET_NAME}" ]; then
+              echo "BUCKET_NAME=${DEV_BUCKET_NAME}" >> $GITHUB_ENV
+            else
+              echo "::warning::No DEV_BUCKET_NAME configured. Will test download only."
+            fi
+          else
+            if [ -n "${PROD_BUCKET_NAME}" ]; then
+              echo "BUCKET_NAME=${PROD_BUCKET_NAME}" >> $GITHUB_ENV
+            else
+              echo "::warning::No PROD_BUCKET_NAME configured. Will test download only."
+            fi
+          fi
+          
+          # Download and extract assets
+          REPO_NAME=$(echo ${GITHUB_REPOSITORY} | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
+          PREFIX="${{ inputs.environment }}-${REPO_NAME}"
+          ASSET_NAME="${PREFIX}-prez-ui-static-assets.zip"
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${{ env.deploy_version }}/${ASSET_NAME}"
+          
+          echo "Using version: ${{ env.deploy_version }}"
+          echo "Attempting to download from: ${DOWNLOAD_URL}"
+          
+          # Download with error handling
+          if ! curl -fLJO "${DOWNLOAD_URL}"; then
+            echo "::error::Failed to download ${ASSET_NAME} from release ${{ env.deploy_version }}"
+            exit 1
+          fi
+          
+          # Verify file size is reasonable (more than 1KB)
+          if [ ! -s "${ASSET_NAME}" ] || [ $(stat -f%z "${ASSET_NAME}") -lt 1024 ]; then
+            echo "::error::Downloaded file is too small or empty. Release assets may not exist for version ${{ env.deploy_version }}"
+            exit 1
+          fi
+          
+          echo "Extracting assets..."
+          rm -rf extracted_assets || true
+          mkdir -p extracted_assets
+          
+          # Test zip file validity
+          if ! unzip -t "${ASSET_NAME}"; then
+            echo "::error::Downloaded file is not a valid zip archive"
+            exit 1
+          fi
+          
+          # Extract files
+          if ! unzip -q "${ASSET_NAME}" -d extracted_assets; then
+            echo "::error::Failed to extract ${ASSET_NAME}"
+            exit 1
+          fi
+          
+          echo "Successfully downloaded and extracted ${ASSET_NAME}"
+
+      - name: Configure AWS Credentials
+        if: env.BUCKET_NAME != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-southeast-2
+
+      - name: Deploy to S3
+        if: env.BUCKET_NAME != ''
+        run: |
+          echo "Deploying to bucket: ${BUCKET_NAME}"
+          # Check if bucket exists
+          aws s3api head-bucket --bucket ${BUCKET_NAME} || {
+            echo "::error::Bucket ${BUCKET_NAME} does not exist or is not accessible"
+            exit 1
+          }
+          # Sync files
+          aws s3 sync extracted_assets/ s3://${BUCKET_NAME}/ --delete || {
+            echo "::error::Failed to sync files to S3"
+            exit 1
+          }
+          echo "Deployment complete!"
+
+      - name: Skip Deployment
+        if: env.BUCKET_NAME == ''
+        run: |
+          echo "Skipping deployment as no bucket name is configured for ${{ inputs.environment }} environment"
+          echo "To enable deployment, please configure ${{ inputs.environment == 'dev' && 'DEV_BUCKET_NAME' || 'PROD_BUCKET_NAME' }} in repository variables"       

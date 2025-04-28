@@ -1,0 +1,133 @@
+name: Manual Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+env:
+  NODE_VERSION: latest
+  DEV_BUCKET_NAME: ${{ vars.DEV_BUCKET_NAME }}
+  PROD_BUCKET_NAME: ${{ vars.PROD_BUCKET_NAME }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  manual-deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      # Step 1: Checkout specified branch
+      - uses: actions/checkout@v3
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      # Step 2: Set up environment
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Step 3: Set environment variables
+      - name: Set deployment variables
+        run: |
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          HASH=$(git rev-parse HEAD)
+          BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
+          VERSION=$(node -p "require('./package.json').version")
+          
+          echo "NUXT_PUBLIC_RELEASE_TIMESTAMP=${TIMESTAMP}" >> $GITHUB_ENV
+          echo "NUXT_PUBLIC_RELEASE_VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "NUXT_PUBLIC_RELEASE_HASH=${HASH:0:7}" >> $GITHUB_ENV
+          echo "NUXT_PUBLIC_RELEASE_SOURCE=${BRANCH_NAME}" >> $GITHUB_ENV
+          echo "NUXT_PUBLIC_RELEASE_TARGET=${{ inputs.environment }}" >> $GITHUB_ENV
+          echo "NUXT_PUBLIC_RELEASE_TYPE=feature" >> $GITHUB_ENV
+          
+          # Set bucket name based on environment
+          if [ "${{ inputs.environment }}" = "dev" ]; then
+            if [ -n "${DEV_BUCKET_NAME}" ]; then
+              echo "BUCKET_NAME=${DEV_BUCKET_NAME}" >> $GITHUB_ENV
+              echo "NUXT_PUBLIC_PREZ_API_ENDPOINT=${{ vars.DEV_ENDPOINT }}" >> $GITHUB_ENV
+            else
+              echo "::error::DEV_BUCKET_NAME not configured"
+              exit 1
+            fi
+          else
+            if [ -n "${PROD_BUCKET_NAME}" ]; then
+              echo "BUCKET_NAME=${PROD_BUCKET_NAME}" >> $GITHUB_ENV
+              echo "NUXT_PUBLIC_PREZ_API_ENDPOINT=${{ vars.PROD_ENDPOINT }}" >> $GITHUB_ENV
+            else
+              echo "::error::PROD_BUCKET_NAME not configured"
+              exit 1
+            fi
+          fi
+
+      # Step 4: Install dependencies
+      - name: Install dependencies
+        run: pnpm install
+
+      # Step 5: Generate static assets
+      - name: Generate static assets
+        run: |
+          echo "Building with following release info:"
+          echo "Timestamp: ${{ env.NUXT_PUBLIC_RELEASE_TIMESTAMP }}"
+          echo "Version: ${{ env.NUXT_PUBLIC_RELEASE_VERSION }}"
+          echo "Hash: ${{ env.NUXT_PUBLIC_RELEASE_HASH }}"
+          echo "Source: ${{ env.NUXT_PUBLIC_RELEASE_SOURCE }}"
+          echo "Target: ${{ env.NUXT_PUBLIC_RELEASE_TARGET }}"
+          echo "Type: ${{ env.NUXT_PUBLIC_RELEASE_TYPE }}"
+          
+          pnpm generate
+          
+          echo "Creating deployment directory..."
+          mkdir -p deployment
+
+          cd .output/public && zip -rv ../../deployment/static-assets.zip . && cd ../../
+          
+          echo "Asset details:"
+          ls -la deployment/static-assets.zip
+
+      # Step 6: Configure AWS
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-southeast-2
+
+      # Step 7: Deploy to S3
+      - name: Deploy to S3
+        run: |
+          echo "Deploying to bucket: ${BUCKET_NAME}"
+          
+          # Check if bucket exists
+          aws s3api head-bucket --bucket ${BUCKET_NAME} || {
+            echo "::error::Bucket ${BUCKET_NAME} does not exist or is not accessible"
+            exit 1
+          }
+          
+          # Extract files
+          rm -rf extracted_assets || true
+          mkdir -p extracted_assets
+          unzip -q deployment/static-assets.zip -d extracted_assets
+          
+          # Sync files
+          aws s3 sync extracted_assets/ s3://${BUCKET_NAME}/ --delete || {
+            echo "::error::Failed to sync files to S3"
+            exit 1
+          }
+          
+          echo "Deployment complete!"
+          echo "Deployed version ${NUXT_PUBLIC_RELEASE_VERSION} from ${NUXT_PUBLIC_RELEASE_SOURCE} to ${NUXT_PUBLIC_RELEASE_TARGET}" 
