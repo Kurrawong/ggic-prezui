@@ -93,8 +93,8 @@ watch(iri, async (newValue) => {
 
         <template #breadcrumb>
             <slot name="breadcrumb" :data="data">
-                <div :key="data?.parents.join()">
-                    <ItemBreadcrumb v-if="data" :prepend="appConfig.breadcrumbPrepend" :name-substitutions="appConfig.nameSubstitutions" :parents="data.parents" />
+                <div :key="data?.parents.slice(2).join()">
+                    <ItemBreadcrumb v-if="data" :prepend="appConfig.breadcrumbPrepend" :name-substitutions="appConfig.nameSubstitutions" :parents="data.parents.slice(2)" />
                     <ItemBreadcrumb v-else-if="error" :custom-items="[{url: '/', label: 'Unable to load page'}]" />
                     <ItemBreadcrumb v-else :prepend="appConfig.breadcrumbPrepend" :custom-items="[{url: '#', label: '...'}]" />
                 </div>

@@ -44,7 +44,7 @@ const filteredProperties = computed(() => {
             } else if (b.predicate.value === `${DEFAULT_PREFIXES.skos}definition`) {
                 return 1;
             } else {
-                return a.predicate.label.value.localeCompare(b.predicate.label.value);
+                return a.predicate.label?.value.localeCompare(b.predicate.label?.value);
             }
         });
     } else {
@@ -57,7 +57,7 @@ const hiddenProperties = computed(() => {
         return Object.entries(term.properties)
             .filter(([key, value]) => !allowedPredicates.includes(key))
             .map(([key, value]) => value)
-            .sort((a, b) => a.predicate.label.value.localeCompare(b.predicate.label.value));
+            .sort((a, b) => a.predicate.label?.value.localeCompare(b.predicate.label?.value));
     } else {
         return [];
     }
