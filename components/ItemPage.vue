@@ -1,62 +1,54 @@
 <script lang="ts" setup>
-import { applyProfileToItem, dumpNodeArray, getTopConceptsUrl, SYSTEM_PREDICATES, type PrezDataItem } from 'prez-lib';
+import { ChevronDown, ChevronUp } from "lucide-vue-next";
+import { applyProfileToItem, dumpNodeArray, getTopConceptsUrl, SYSTEM_PREDICATES, type PrezConceptSchemeNode, type PrezDataItem, type PrezProperties, type PrezFocusNode } from 'prez-lib';
 
 const appConfig = useAppConfig();
 const runtimeConfig = useRuntimeConfig();
 const { globalProfiles } = useGlobalProfiles();
-const router = useRouter();
 const route = useRoute();
 const { getPageUrl } = usePageInfo();
 const urlPath = ref(getPageUrl());
 const apiEndpoint = useGetPrezAPIEndpoint();
 const { status, error, data } = useGetItem(apiEndpoint, urlPath);
-const collections = ref([]);
-const iri = computed(() => data.value?.data.value);
-const isConceptScheme = computed(()=> data.value?.data.rdfTypes?.find(n=>n.value == SYSTEM_PREDICATES.skosConceptScheme));
-// const isCollection = computed(()=> data.value?.data.rdfTypes?.find(n=>n.value === "http://www.w3.org/2004/02/skos/core#Collection"));
-// const isConcept = computed(()=> data.value?.data.rdfTypes?.find(n=>n.value == SYSTEM_PREDICATES.skosConcept));
-const topConceptsUrl = computed(()=>isConceptScheme.value ? getTopConceptsUrl(data.value!.data) : '');
+const isConceptScheme = computed(() => data.value?.data.rdfTypes?.find(n => n.value == SYSTEM_PREDICATES.skosConceptScheme));
+const topConceptsUrl = computed(() => isConceptScheme.value ? getTopConceptsUrl(data.value!.data) : '');
 const apiUrl = (apiEndpoint + urlPath.value).split('?')[0];
-const currentProfile = computed(()=>data.value ? data.value.profiles.find(p=>p.current) : undefined);
+const currentProfile = computed(() => data.value ? data.value.profiles.find(p => p.current) : undefined);
 
-type SPARQLResultsJSON = {
-    head: {
-        vars?: string[];
-        link?: string[];
-    },
-    results?: {
-        bindings: Record<string, {
-            type: "uri" | "literal" | "bnode";
-            value: string;
-            "xml:lang"?: string;
-            datatype?: string;
-        }>[];
-    },
-    boolean?: boolean;
-};
+const allowedPredicates = [
+    "http://www.w3.org/2004/02/skos/core#definition",
+    "http://www.w3.org/2004/02/skos/core#broader",
+    "http://www.w3.org/2004/02/skos/core#narrower",
+    "http://www.w3.org/2004/02/skos/core#inScheme",
+    "http://www.w3.org/2004/02/skos/core#member",
+    "https://schema.org/status",
+];
 
-async function getCollections(iri: string) {
-    if (isConceptScheme.value) {
-        const query = `PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
-            SELECT ?coll ?label
-            WHERE {
-                ?coll a skos:Collection ;
-                    skos:prefLabel ?label ;
-                    skos:inScheme <${iri}> .
-            }`;
-        const r = await $fetch<SPARQLResultsJSON>(`${runtimeConfig.public.prezApiEndpoint}/sparql`, {
-            params: {
-                query: query
-            }
-        });
-        return r.results?.bindings.map(r => {
-            return {
-                iri: r.coll.value,
-                label: r.label.value
-            }
-        }) || [];
-    } else return [];
-}
+const showHidden = ref(false);
+
+const filteredData = computed<PrezFocusNode>(() => {
+    let properties: PrezProperties = {};
+    if (data.value?.data?.properties) {
+        properties = Object.entries(data.value?.data.properties).filter(([key, value]) => allowedPredicates.includes(key)).reduce((obj, [key, value]) => {
+            obj[key] = value;
+            return obj;
+        }, {} as PrezProperties);
+    }
+
+    return {...data.value?.data as PrezFocusNode, properties}
+});
+
+const hiddenData = computed<PrezFocusNode>(() => {
+    let properties: PrezProperties = {};
+    if (data.value?.data?.properties) {
+        properties = Object.entries(data.value?.data.properties).filter(([key, value]) => !allowedPredicates.includes(key)).reduce((obj, [key, value]) => {
+            obj[key] = value;
+            return obj;
+        }, {} as PrezProperties);
+    }
+
+    return {...data.value?.data as PrezFocusNode, properties}
+});
 
 // Watch for changes in both globalProfiles and currentProfile
 // Apply profile to item uses the current profile to order properties
@@ -69,13 +61,6 @@ watch([() => globalProfiles.value, () => currentProfile.value], ([newGlobalProfi
     }
   }
 });
-
-watch(iri, async (newValue) => {
-    collections.value = [];
-    if (isConceptScheme.value) {
-        collections.value = await getCollections(newValue);
-    }
-}, { immediate: true });
 </script>
 
 <template>
@@ -138,11 +123,29 @@ watch(iri, async (newValue) => {
                             <slot name="item-table" :data="data" :is-concept-scheme="isConceptScheme" :top-concepts-url="topConceptsUrl">
 
                                 <ItemTable
-                                    :term="data.data" 
+                                    :term="filteredData" 
                                     :key="urlPath + globalProfiles?.length + currentProfile?.uri" 
                                     :is-concept-scheme="isConceptScheme"
                                     :top-concepts-url="topConceptsUrl"
+                                    :renderMarkdown="runtimeConfig.public.prezAutoDetectMarkdown"
                                 />
+
+                                <div v-if="hiddenData.properties" class="m-4 flex flex-col">
+                                    <div :class="`w-full flex flex-row items-center justify-between border rounded-t p-2 text-sm cursor-pointer hover:bg-accent transition-all ${showHidden ? '' : 'rounded-b'}`" @click="showHidden = !showHidden">
+                                        <span>Further metadata</span>
+                                        <ChevronUp v-if="showHidden" class="size-4" />
+                                        <ChevronDown v-else class="size-4" />
+                                    </div>
+                                    <div :class="`overflow-hidden transition-all ${showHidden ? 'h-auto' : 'h-0'}`">
+                                        <ItemTable
+                                            :term="hiddenData" 
+                                            :key="urlPath + globalProfiles?.length + currentProfile?.uri" 
+                                            :is-concept-scheme="isConceptScheme"
+                                            :top-concepts-url="topConceptsUrl"
+                                            :renderMarkdown="runtimeConfig.public.prezAutoDetectMarkdown"
+                                        />
+                                    </div>
+                                </div>
 
                             </slot>
                             <slot name="item-middle" :data="data" :is-concept-scheme="isConceptScheme" :top-concepts-url="topConceptsUrl"></slot>
@@ -154,6 +157,15 @@ watch(iri, async (newValue) => {
                                     </Button>
                                 </p>
                             </slot> -->
+
+                            <slot name="item-collections" :data="data" :is-concept-scheme="isConceptScheme">
+                                <div class="mt-6" v-if="isConceptScheme && (data.data as PrezConceptSchemeNode).collections.length > 0">
+                                    <p><b>Collections</b></p>
+                                    <div class="mt-4 flex flex-col gap-2">
+                                        <Node v-for="collection in (data.data as PrezConceptSchemeNode).collections" :term="collection" />
+                                    </div>
+                                </div>
+                            </slot>
 
                             <slot name="item-concepts" :data="data" :is-concept-scheme="isConceptScheme" :top-concepts-url="topConceptsUrl">
                                 <div class="mt-6" v-if="isConceptScheme && topConceptsUrl != ''">
@@ -167,14 +179,7 @@ watch(iri, async (newValue) => {
                                 </div>
                             </slot>
 
-                            <slot name="item-bottom" :data="data" :is-concept-scheme="isConceptScheme" :top-concepts-url="topConceptsUrl">
-                                <div v-if="isConceptScheme" class="mt-6">
-                                    <p><b>Collections</b></p>
-                                    <div>
-                                        <NuxtLink v-for="coll in collections" :to="`/object?uri=${coll.iri}`" external>{{ coll.label }}</NuxtLink>
-                                    </div>
-                                </div>
-                            </slot>
+                            <slot name="item-bottom" :data="data" :is-concept-scheme="isConceptScheme" :top-concepts-url="topConceptsUrl"></slot>
                         </slot>
                     </div>
                 </div>

@@ -10,11 +10,14 @@ export default defineAppConfig({
         { "label": "SPARQL", "url": "/sparql", "active": false },
         { "label": "Profiles", "url": "/profiles", "active": false },
         { "label": "About", "url": "/about", "active": true },
-        { "label": "API Documentation", "url": "/docs", "active": true },
-        { "label": "Vocabulary Management", "url": "/admin", "active": false }
+        { "label": "API Documentation", "url": "/docs", "active": true }
     ],
     nameSubstitutions: {
         "collections": "Vocabularies"
+    },
+    pagination: {
+        itemsPerPage: 20,
+        conceptsPerPage: 50
     }
 });
 
