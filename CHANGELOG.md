@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/Kurrawong/ggic-prezui/compare/v1.1.0...v1.2.0) (2025-08-18)
+
+
+### Features
+
+* upgraded prez-ui, added home page content, increased pagination limits, patched security vulnerabilities, added responsive nav ([86d43e2](https://github.com/Kurrawong/ggic-prezui/commit/86d43e2daf9d584cfbe70d82fea9b21a0ab8b742))
+
 # [1.1.0](https://github.com/Kurrawong/ggic-prezui/compare/v1.0.0...v1.1.0) (2025-07-14)
 
 
