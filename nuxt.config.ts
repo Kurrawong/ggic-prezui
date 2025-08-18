@@ -17,7 +17,7 @@ export default defineNuxtConfig({
     },
     app: {
         head: {
-            title: "GGIC Vocabularies",
+            title: "GGIC Vocabulary Register",
         },
     },
 });
